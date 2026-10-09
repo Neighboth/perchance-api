@@ -30,7 +30,7 @@ class TextGenerator(Generator):
         *,
         start_with: str | None = None,
         stop_sequences: list[str] | None = None,
-        timeout: float | None = 15.0,
+        timeout: float | None = 180.0,
     ) -> AsyncGenerator[str, None]:
         """Stream generated text.
 
@@ -43,7 +43,7 @@ class TextGenerator(Generator):
         stop_sequences: list[str] | None
             List of sequences to stop the generation at.
         timeout: float | None
-            Waiting timeout in seconds.
+            Waiting timeout in seconds (default: 180.0).
         """
         async with self._lock:
             browser_id, user_key = await self.ensure_verified(self.EMBED_DOMAIN, thread=0)
@@ -71,7 +71,8 @@ class TextGenerator(Generator):
                 "Referer": "https://text-generation.perchance.org/",
             }
 
-            client_timeout = aiohttp.ClientTimeout(total=timeout or 60.0)
+            total_timeout = timeout or 180.0
+            client_timeout = aiohttp.ClientTimeout(total=total_timeout, sock_read=60.0)
 
             async with aiohttp.ClientSession(headers=headers, timeout=client_timeout) as session:
                 async with session.post(url, json=body) as resp:
@@ -97,6 +98,7 @@ class TextGenerator(Generator):
                             except Exception:
                                 pass
                         elif decoded_line.startswith("data:"):
+                            # Signal of stream finish
                             return
                         elif "client_update_required" in decoded_line or "invalid_key" in decoded_line:
                             self._user_keys.pop(self.EMBED_DOMAIN, None)
@@ -108,7 +110,7 @@ class TextGenerator(Generator):
         *,
         start_with: str | None = None,
         stop_sequences: list[str] | None = None,
-        timeout: float | None = 30.0,
+        timeout: float | None = 180.0,
     ) -> str:
         """Generate text.
 

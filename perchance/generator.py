@@ -137,7 +137,7 @@ class Generator:
                             try {{
                                 return await verifyUser({thread});
                             }} catch(e) {{
-                                return await verifyUser();
+                                return await verifyUser('default');
                             }}
                         }}
                         return null;
@@ -166,8 +166,21 @@ class Generator:
                     }}""")
 
                     if info and info.get("id") and info.get("key"):
+                        # Ensure we give the verification network roundtrip a moment
+                        await asyncio.sleep(1.0)
+                        # Re-read key to ensure it is the freshly verified one
+                        fresh_key = await page.evaluate(f"""() => {{
+                            if (window.generationIdentity && window.generationIdentity.storage && window.generationIdentity.storage['userKey-{thread}']) {{
+                                return window.generationIdentity.storage['userKey-{thread}'];
+                            }}
+                            for (let k in localStorage) {{
+                                if (k.includes('userKey-{thread}')) return localStorage[k];
+                            }}
+                            return null;
+                        }}""")
+                        effective_key = fresh_key or info["key"]
                         self._browser_id = info["id"]
-                        self._user_keys[embed_domain] = info["key"]
+                        self._user_keys[embed_domain] = effective_key
 
                         # Save storage state to profile directory
                         try:
@@ -176,7 +189,7 @@ class Generator:
                         except Exception:
                             pass
 
-                        return self._browser_id, info["key"]
+                        return self._browser_id, effective_key
 
                     await asyncio.sleep(0.5)
 

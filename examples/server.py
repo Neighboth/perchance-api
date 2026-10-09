@@ -31,7 +31,7 @@ HOST = os.getenv("HOST", "0.0.0.0")
 app = FastAPI(
     title="Perchance OpenAI-Compatible API",
     description="OpenAI API compatible server powered by Perchance AI (Text & Image Generation)",
-    version="0.2.1"
+    version="0.2.4"
 )
 
 app.add_middleware(
@@ -323,6 +323,7 @@ async def image_generations(request: ImageGenerationRequest):
 
     return {
         "created": created_time,
+        "model": request.model,
         "data": results_data
     }
 
