@@ -15,7 +15,12 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from perchance import ImageGenerator, TextGenerator
-from perchance.styles import SUPPORTED_RATIOS, SUPPORTED_STYLES
+from perchance.styles import (
+    SUPPORTED_RATIOS,
+    SUPPORTED_STYLES,
+    SUPPORTED_GUIDANCE_SCALES,
+    SUPPORTED_STYLE_MIXING,
+)
 
 # Load environment variables from .env file
 load_dotenv()
@@ -85,8 +90,13 @@ class ImageGenerationRequest(BaseModel):
     size: str = "1024x1024"
     response_format: str = "url"  # "url" or "b64_json"
     style: str | None = "professional_photo"  # default photo style
-    ratio: str | None = None  # e.g. "1:1", "16:9", "9:16"
+    style_mixing: str | None = "not_mix"  # 'not_mix', 'blend', 'alternate'
+    secondary_style: str | None = None
+    ratio: str | None = None  # e.g. "1:1", "square", "9:16", "portrait", "16:9", "landscape"
+    shape: str | None = None  # alias for ratio
     negative_prompt: str | None = None
+    seed: int = -1  # -1 for random
+    guidance_scale: float | str | None = 7.0  # e.g. 7.0, 'default(7)', 'low(4)', 'high(10)', 'very_high(15)'
 
 
 # ---------------------------------------------------------
@@ -123,14 +133,18 @@ async def list_models():
 
 @app.get("/v1/options")
 async def list_options():
-    """List all available image styles and aspect ratios."""
+    """List all available image styles, aspect ratios, guidance scales, and style mixing options."""
     return {
         "styles": {
             k: v["label"] for k, v in SUPPORTED_STYLES.items()
         },
         "default_style": "professional_photo",
+        "style_mixing": list(SUPPORTED_STYLE_MIXING.keys()),
+        "default_style_mixing": "not_mix",
         "ratios": list(SUPPORTED_RATIOS.keys()),
-        "default_ratio": "1:1 (square)"
+        "default_ratio": "1:1 (square)",
+        "guidance_scales": SUPPORTED_GUIDANCE_SCALES,
+        "default_guidance_scale": 7.0,
     }
 
 
@@ -266,8 +280,7 @@ async def image_generations(request: ImageGenerationRequest):
     if not request.prompt.strip():
         raise HTTPException(status_code=400, detail="Prompt cannot be empty")
 
-    # Map ratio / size
-    chosen_ratio = request.ratio
+    chosen_ratio = request.ratio or request.shape
     if not chosen_ratio:
         if request.size in ["1024x1024", "512x512", "768x768"]:
             chosen_ratio = "1:1"
@@ -288,8 +301,12 @@ async def image_generations(request: ImageGenerationRequest):
         result = await gen.image(
             prompt=request.prompt,
             negative_prompt=request.negative_prompt,
+            seed=request.seed,
             ratio=chosen_ratio,
-            style=style_name
+            style=style_name,
+            style_mixing=request.style_mixing,
+            secondary_style=request.secondary_style,
+            guidance_scale=request.guidance_scale,
         )
 
         binary = await result.download()

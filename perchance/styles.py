@@ -2,14 +2,50 @@ from __future__ import annotations
 
 # Available aspect ratios and their pixel resolutions
 SUPPORTED_RATIOS: dict[str, str] = {
+    # 1:1 Square
     "1:1": "768x768",
     "square": "768x768",
+    "512x512": "512x512",
+    "768x768": "768x768",
+    
+    # Portrait
+    "portrait": "512x768",
+    "portrait(512x768)": "512x768",
     "9:16": "512x768",
     "2:3": "512x768",
-    "portrait": "512x768",
+    "512x768": "512x768",
+    
+    # Landscape
+    "landscape": "768x512",
+    "landscape(768x512)": "768x512",
     "16:9": "768x512",
     "3:2": "768x512",
-    "landscape": "768x512",
+    "768x512": "768x512",
+}
+
+# Guidance scale mappings
+SUPPORTED_GUIDANCE_SCALES: dict[str, float] = {
+    "default": 7.0,
+    "default(7)": 7.0,
+    "7": 7.0,
+    "low": 4.0,
+    "low(4)": 4.0,
+    "4": 4.0,
+    "medium": 7.0,
+    "high": 10.0,
+    "high(10)": 10.0,
+    "10": 10.0,
+    "very_high": 15.0,
+    "very_high(15)": 15.0,
+    "15": 15.0,
+}
+
+# Art Style Mixing Modes
+SUPPORTED_STYLE_MIXING: dict[str, str] = {
+    "not_mix": "Not Mix",
+    "not mix": "Not Mix",
+    "blend": "Blend",
+    "alternate": "Alternate",
 }
 
 DEFAULT_NEGATIVE_PHOTO = "anime, cartoon, drawing, illustration, sketch, 3d render, painting, doll, cgi, low quality, bad anatomy, blurry, watermark"
@@ -19,6 +55,11 @@ SUPPORTED_STYLES: dict[str, dict[str, str]] = {
         "label": "Professional Photo",
         "prompt_template": "{prompt}, sharp focus, depth of field, 8k photo, HDR, professional lighting, taken with Canon EOS R5, DSLR, 75mm lens, photorealistic, realistic, 35mm photograph, master photography",
         "negative_prompt": DEFAULT_NEGATIVE_PHOTO,
+    },
+    "painted_anime": {
+        "label": "Painted Anime",
+        "prompt_template": "painted anime illustration of {prompt}, rich colors, anime aesthetic, painterly style, studio anime, masterpiece, clean lines, beautiful art",
+        "negative_prompt": "low quality, photo, realistic, 3d render, blurry",
     },
     "casual_photo": {
         "label": "Casual Photo",
@@ -75,6 +116,16 @@ SUPPORTED_STYLES: dict[str, dict[str, str]] = {
         "prompt_template": "comic book style art of {prompt}, vintage comic art, 1960s comic, retro halftone dots, ink lines",
         "negative_prompt": "photo, 3d render, blurry",
     },
+    "dark_fantasy": {
+        "label": "Dark Fantasy",
+        "prompt_template": "{prompt}, dark fantasy art, gothic, intricate gloomy details, dramatic moody lighting, atmospheric, epic masterpiece, 8k",
+        "negative_prompt": "bright, cheerful, cartoon, low quality",
+    },
+    "cyberpunk": {
+        "label": "Cyberpunk",
+        "prompt_template": "{prompt}, cyberpunk aesthetic, neon lights, rainy reflection, high tech futuristic cityscape, hyper-detailed, octane render, 8k",
+        "negative_prompt": "natural, historical, medieval, low quality",
+    },
     "none": {
         "label": "No Style (Raw)",
         "prompt_template": "{prompt}",
@@ -83,13 +134,28 @@ SUPPORTED_STYLES: dict[str, dict[str, str]] = {
 }
 
 
-def apply_style(prompt: str, style_name: str | None, user_negative: str | None = None) -> tuple[str, str]:
-    """Apply style prompt template and negative prompt to the input prompt."""
+def apply_style(
+    prompt: str,
+    style_name: str | None,
+    user_negative: str | None = None,
+    style_mixing: str | None = None,
+    secondary_style: str | None = None
+) -> tuple[str, str]:
+    """Apply style prompt template and negative prompt to the input prompt, supporting style mixing."""
     key = (style_name or "professional_photo").lower().replace(" ", "_").replace("-", "_")
     style_info = SUPPORTED_STYLES.get(key, SUPPORTED_STYLES["professional_photo"])
 
     styled_prompt = style_info["prompt_template"].format(prompt=prompt)
     default_negative = style_info["negative_prompt"]
+
+    mixing_key = (style_mixing or "not_mix").lower().replace(" ", "_").replace("-", "_")
+    if mixing_key not in ["not_mix", "none"] and secondary_style:
+        sec_key = secondary_style.lower().replace(" ", "_").replace("-", "_")
+        sec_info = SUPPORTED_STYLES.get(sec_key)
+        if sec_info:
+            styled_prompt = f"{styled_prompt}, mixed with {sec_info['label']} style"
+            if sec_info["negative_prompt"]:
+                default_negative = f"{default_negative}, {sec_info['negative_prompt']}"
 
     if user_negative:
         if default_negative:
@@ -106,3 +172,13 @@ def resolve_resolution(ratio_or_shape: str | None) -> str:
     """Resolve aspect ratio or shape to supported pixel resolution string."""
     key = (ratio_or_shape or "square").lower().strip()
     return SUPPORTED_RATIOS.get(key, "768x768")
+
+
+def resolve_guidance_scale(scale: float | str | None) -> float:
+    """Resolve guidance scale to a valid float (default 7.0)."""
+    if scale is None:
+        return 7.0
+    if isinstance(scale, (int, float)):
+        return float(scale)
+    key = str(scale).lower().strip()
+    return SUPPORTED_GUIDANCE_SCALES.get(key, 7.0)

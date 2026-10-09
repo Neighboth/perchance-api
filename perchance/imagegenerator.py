@@ -183,34 +183,45 @@ class ImageGenerator(Generator):
         shape: str = "square",
         ratio: str | None = None,
         style: str = "professional_photo",
-        guidance_scale: float = 7.0
+        style_mixing: str | None = "not_mix",
+        secondary_style: str | None = None,
+        guidance_scale: float | str | None = 7.0,
     ) -> ImageResult:
         """
-        Generate image.
+        Generate image with Perchance professional options.
 
         Parameters
         ----------
         prompt: str
-            Image description.
+            Image description (required).
         negative_prompt: str | None
-            Things you do NOT want to see in the image.
+            Things you do NOT want to see in the image (optional).
         seed: int
-            Generation seed.
+            Generation seed (-1 for random).
         shape: str
-            Aspect ratio / shape. Can be '1:1', 'square', '9:16', 'portrait', '16:9', 'landscape', etc.
+            Aspect ratio / shape ('square', 'portrait(512x768)', 'landscape(768x512)', etc.).
         ratio: str | None
-            Alias for shape/aspect ratio.
+            Alias for shape/aspect ratio ('1:1', '9:16', '16:9').
         style: str
-            Art style. Defaults to 'professional_photo'. Options include 'professional_photo',
-            'casual_photo', 'cinematic', 'anime', 'drawn_anime', 'digital_painting',
-            'concept_art', 'oil_painting', 'watercolor', 'pixel_art', '3d_disney', 'none', etc.
-        guidance_scale: float
-            Accuracy of the prompt in range 1-30.
+            Primary art style ('professional_photo', 'painted_anime', 'cinematic', etc.).
+        style_mixing: str | None
+            Art style mixing mode ('not_mix', 'blend', 'alternate').
+        secondary_style: str | None
+            Secondary art style when style mixing is enabled.
+        guidance_scale: float | str | None
+            Prompt adherence accuracy (e.g. 7.0, 'default(7)', 'low(4)', 'high(10)', 'very_high(15)').
         """
-        from .styles import apply_style, resolve_resolution
+        from .styles import apply_style, resolve_resolution, resolve_guidance_scale
 
         resolution = resolve_resolution(ratio or shape)
-        styled_prompt, effective_negative = apply_style(prompt, style, negative_prompt)
+        effective_scale = resolve_guidance_scale(guidance_scale)
+        styled_prompt, effective_negative = apply_style(
+            prompt=prompt,
+            style_name=style,
+            user_negative=negative_prompt,
+            style_mixing=style_mixing,
+            secondary_style=secondary_style,
+        )
       
         headers = {
             "Content-Type": "application/json",
@@ -254,7 +265,7 @@ class ImageGenerator(Generator):
                 "negativePrompt": effective_negative,
                 "seed": seed,
                 "resolution": resolution,
-                "guidanceScale": guidance_scale
+                "guidanceScale": effective_scale
             }
 
             try:

@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <title>Perchance OpenAI API Test Paneli</title>
+</head>
+<body>
+
+    <h1>Perchance OpenAI API Test Paneli</h1>
+
+    <label for="apiUrl">API URL:</label>
+    <input type="text" id="apiUrl" value="http://localhost:8000/v1" size="35">
+
+    <hr>
+
+    <!-- 1. AI SOHBET BÖLÜMÜ -->
+    <h2>1. AI ile Karşılıklı Sohbet</h2>
+    
+    <div id="chatHistory" style="border: 1px solid black; padding: 10px; height: 250px; overflow-y: scroll; white-space: pre-wrap;"></div>
+    <br>
+    
+    <label for="chatInput">Mesajınız:</label>
+    <input type="text" id="chatInput" size="60" placeholder="Bir şeyler yazın...">
+    <button id="sendBtn" onclick="sendMessage()">Gönder (Streaming)</button>
+
+    <hr>
+
+    <!-- 2. RESİM OLUŞTURMA BÖLÜMÜ -->
+    <h2>2. Resim Oluşturma</h2>
+
+    <label for="imgPrompt">Prompt (Zorunlu):</label><br>
+    <textarea id="imgPrompt" rows="3" cols="70" placeholder="Örnek: portrait of a zebra-woman, keeper of the overworld"></textarea>
+    <br><br>
+
+    <label for="imgNegative">Negative Prompt (Opsiyonel):</label><br>
+    <textarea id="imgNegative" rows="2" cols="70" placeholder="Resimde olmasını istemediğiniz şeyler (Things you don't want in the image)"></textarea>
+    <br><br>
+
+    <label for="imgStyle">Art Style (Tarz):</label>
+    <select id="imgStyle">
+        <option value="professional_photo" selected>Professional Photo (Varsayılan - Gerçekçi)</option>
+        <option value="painted_anime">Painted Anime (Boyama Anime)</option>
+        <option value="casual_photo">Casual Photo (Doğal Anlık Fotoğraf)</option>
+        <option value="cinematic">Cinematic (Film Karesi)</option>
+        <option value="anime">Anime</option>
+        <option value="drawn_anime">Drawn Anime (Çizim Anime)</option>
+        <option value="digital_painting">Digital Painting (Dijital Tablo)</option>
+        <option value="concept_art">Concept Art (Konsept Sanat)</option>
+        <option value="oil_painting">Oil Painting (Yağlı Boya)</option>
+        <option value="watercolor">Watercolor (Suluboya)</option>
+        <option value="pixel_art">Pixel Art (16-bit Piksel)</option>
+        <option value="3d_disney">3D Disney / Pixar</option>
+        <option value="vintage_comic">Vintage Comic (Retro Çizgi Roman)</option>
+        <option value="dark_fantasy">Dark Fantasy (Karanlık Fantastik)</option>
+        <option value="cyberpunk">Cyberpunk (Siberpunk)</option>
+        <option value="none">None (Ham Prompt)</option>
+    </select>
+    &nbsp;&nbsp;
+
+    <label for="imgStyleMixing">Art Style Mixing:</label>
+    <select id="imgStyleMixing">
+        <option value="not_mix" selected>Not Mix</option>
+        <option value="blend">Blend</option>
+        <option value="alternate">Alternate</option>
+    </select>
+    &nbsp;&nbsp;
+
+    <label for="imgRatio">Shape / Oran:</label>
+    <select id="imgRatio">
+        <option value="square" selected>Square (768x768)</option>
+        <option value="portrait">Portrait (512x768)</option>
+        <option value="landscape">Landscape (768x512)</option>
+    </select>
+    <br><br>
+
+    <label for="imgGuidance">Guidance Scale:</label>
+    <select id="imgGuidance">
+        <option value="default(7)" selected>default(7)</option>
+        <option value="low(4)">low(4)</option>
+        <option value="high(10)">high(10)</option>
+        <option value="very_high(15)">very_high(15)</option>
+    </select>
+    &nbsp;&nbsp;
+
+    <label for="imgSeed">Image Seed (Opsiyonel):</label>
+    <input type="number" id="imgSeed" placeholder="Boş bırakırsanız rastgele (-1)" style="width: 140px;">
+    &nbsp;&nbsp;
+
+    <label for="imgCount">Number of images:</label>
+    <input type="number" id="imgCount" value="1" min="1" max="10" style="width: 50px;">
+    <br><br>
+
+    <button id="generateBtn" onclick="generateImage()">Resim Oluştur</button>
+    <span id="imgStatus"></span>
+    <br><br>
+
+    <div id="imageResult"></div>
+
+    <script>
+        const messages = [];
+
+        // --- SOHBET FONKSİYONU (STREAMING DESTEKLİ) ---
+        async function sendMessage() {
+            const baseUrl = document.getElementById("apiUrl").value.trim();
+            const input = document.getElementById("chatInput");
+            const sendBtn = document.getElementById("sendBtn");
+            const history = document.getElementById("chatHistory");
+            const userText = input.value.trim();
+
+            if (!userText) return;
+
+            // Kullanıcı mesajını ekle
+            messages.push({ role: "user", content: userText });
+            history.innerText += "\nKullanıcı: " + userText + "\nAI: ";
+            input.value = "";
+            sendBtn.disabled = true;
+
+            try {
+                const response = await fetch(`${baseUrl}/chat/completions`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        model: "perchance-text",
+                        messages: messages,
+                        stream: true
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error("HTTP Hata: " + response.status);
+                }
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let assistantReply = "";
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    const chunk = decoder.decode(value, { stream: true });
+                    const lines = chunk.split("\n");
+
+                    for (const line of lines) {
+                        const trimmed = line.trim();
+                        if (trimmed.startsWith("data: ") && trimmed !== "data: [DONE]") {
+                            try {
+                                const parsed = JSON.parse(trimmed.slice(6));
+                                const token = parsed.choices[0]?.delta?.content || "";
+                                assistantReply += token;
+                                history.innerText += token;
+                                history.scrollTop = history.scrollHeight;
+                            } catch (e) {}
+                        }
+                    }
+                }
+
+                history.innerText += "\n";
+                messages.push({ role: "assistant", content: assistantReply });
+
+            } catch (err) {
+                history.innerText += "\n[Hata: " + err.message + "]\n";
+            } finally {
+                sendBtn.disabled = false;
+                history.scrollTop = history.scrollHeight;
+            }
+        }
+
+        // Enter tuşu ile gönderme
+        document.getElementById("chatInput").addEventListener("keypress", function(e) {
+            if (e.key === "Enter") sendMessage();
+        });
+
+        // --- RESİM OLUŞTURMA FONKSİYONU ---
+        async function generateImage() {
+            const baseUrl = document.getElementById("apiUrl").value.trim();
+            const prompt = document.getElementById("imgPrompt").value.trim();
+            const negativePrompt = document.getElementById("imgNegative").value.trim() || null;
+            const style = document.getElementById("imgStyle").value;
+            const styleMixing = document.getElementById("imgStyleMixing").value;
+            const ratio = document.getElementById("imgRatio").value;
+            const guidance = document.getElementById("imgGuidance").value;
+            const seedVal = document.getElementById("imgSeed").value.trim();
+            const seed = seedVal ? parseInt(seedVal, 10) : -1;
+            const count = parseInt(document.getElementById("imgCount").value, 10) || 1;
+
+            const generateBtn = document.getElementById("generateBtn");
+            const status = document.getElementById("imgStatus");
+            const resultDiv = document.getElementById("imageResult");
+
+            if (!prompt) {
+                alert("Lütfen bir resim promptu yazın.");
+                return;
+            }
+
+            generateBtn.disabled = true;
+            status.innerText = " Resim oluşturuluyor, lütfen bekleyin...";
+            resultDiv.innerHTML = "";
+
+            try {
+                const response = await fetch(`${baseUrl}/images/generations`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        model: "perchance-image",
+                        prompt: prompt,
+                        negative_prompt: negativePrompt,
+                        style: style,
+                        style_mixing: styleMixing,
+                        ratio: ratio,
+                        guidance_scale: guidance,
+                        seed: seed,
+                        n: count,
+                        response_format: "url"
+                    })
+                });
+
+                if (!response.ok) {
+                    const errText = await response.text();
+                    throw new Error("HTTP " + response.status + ": " + errText);
+                }
+
+                const data = await response.json();
+                status.innerText = " Tamamlandı!";
+                let htmlOut = "<br>";
+                data.data.forEach((item, idx) => {
+                    htmlOut += `
+                        <div style="margin-bottom: 20px;">
+                            <img src="${item.url}" alt="Üretilen Resim ${idx + 1}" style="max-width: 600px; display: block;">
+                            <br>
+                            <a href="${item.url}" download="perchance-resim-${idx + 1}.jpg">Resmi İndir (${idx + 1})</a>
+                        </div>
+                    `;
+                });
+                resultDiv.innerHTML = htmlOut;
+
+            } catch (err) {
+                status.innerText = " Hata oluştu!";
+                resultDiv.innerText = "Hata detayı: " + err.message;
+            } finally {
+                generateBtn.disabled = false;
+            }
+        }
+    </script>
+
+</body>
+</html>
