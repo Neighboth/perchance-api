@@ -110,38 +110,43 @@ class ImageResult:
             if not page.url.startswith("https://image-generation.perchance.org"):
                 await page.goto("https://image-generation.perchance.org/embed#%7B%7D")
 
-            response_data = await page.evaluate("""
-                async (urls) => {
-                    const failures = [];
-                    for (const url of urls) {
-                        try {
-                            const response = await fetch(url);
-                            if (!response.ok) {
-                                failures.push(`${response.status} ${url}`);
-                                continue;
+            max_download_attempts = 4
+            for d_attempt in range(max_download_attempts):
+                response_data = await page.evaluate("""
+                    async (urls) => {
+                        const failures = [];
+                        for (const url of urls) {
+                            try {
+                                const response = await fetch(url);
+                                if (!response.ok) {
+                                    failures.push(`${response.status} ${url}`);
+                                    continue;
+                                }
+                                const blob = await response.blob();
+                                const base64 = await new Promise(resolve => {
+                                    const reader = new FileReader();
+                                    reader.onloadend = () => resolve(reader.result.split(",")[1]);
+                                    reader.readAsDataURL(blob);
+                                });
+                                return { ok: true, data: base64 };
+                            } catch (e) {
+                                failures.push(`${e.message} ${url}`);
                             }
-                            const blob = await response.blob();
-                            const base64 = await new Promise(resolve => {
-                                const reader = new FileReader();
-                                reader.onloadend = () => resolve(reader.result.split(",")[1]);
-                                reader.readAsDataURL(blob);
-                            });
-                            return { ok: true, data: base64 };
-                        } catch (e) {
-                            failures.push(`${e.message} ${url}`);
                         }
+                        return { ok: false, failures };
                     }
-                    return { ok: false, failures };
-                }
-            """, urls)
+                """, urls)
 
-            if not response_data.get("ok"):
-                raise errors.ConnectionError(
-                    f"Failed to download image: {response_data.get('failures')}"
-                )
+                if response_data.get("ok"):
+                    data = base64.b64decode(response_data["data"])
+                    return io.BytesIO(data)
 
-            data = base64.b64decode(response_data["data"])
-            return io.BytesIO(data)
+                # Wait slightly for proxy image upload to settle
+                await asyncio.sleep(1.0 + d_attempt * 0.5)
+
+            raise errors.ConnectionError(
+                f"Failed to download image after retries: {response_data.get('failures')}"
+            )
         finally:
             await page.close()
  
@@ -207,61 +212,90 @@ class ImageGenerator(Generator):
         resolution = resolve_resolution(ratio or shape)
         styled_prompt, effective_negative = apply_style(prompt, style, negative_prompt)
       
-        browser_id, user_key = await self.ensure_verified(self.EMBED_DOMAIN, thread=0)
-
-        url = (
-            f"{self.BASE_URL}/generate"
-            f"?userKey={user_key}"
-            f"&requestId=aiImageCompletion{random.randint(0, 2**30)}"
-            f"&__cacheBust={random.random()}"
-        )
-        body = {
-            "generatorName": "ai-image-generator",
-            "channel": "ai-text-to-image-generator",
-            "subChannel": "public",
-            "prompt": styled_prompt,
-            "negativePrompt": effective_negative,
-            "seed": seed,
-            "resolution": resolution,
-            "guidanceScale": guidance_scale
-        }
-
         headers = {
             "Content-Type": "application/json",
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
             "Referer": "https://image-generation.perchance.org/",
         }
 
-        async with aiohttp.ClientSession(headers=headers) as session:
-            async with session.post(url, json=body) as resp:
-                if resp.status == 429:
-                    raise errors.RateLimitError("Rate limit exceeded")
-                if resp.status != 200:
-                    text = await resp.text()
-                    raise errors.ConnectionError(f"Generation failed with HTTP {resp.status}: {text}")
+        max_retries = 3
+        last_error = None
 
-                response = await resp.json(content_type=None)
+        for attempt in range(max_retries):
+            browser_id, user_key = await self.ensure_verified(self.EMBED_DOMAIN, thread=0)
 
-        if response.get("status") != "success":
-            status = response.get("status")
-            if status == "invalid_key":
-                # invalidate cached key so next run reverifies
+            # Retrieve fresh adAccessCode from perchance.org
+            ad_access_code = ""
+            try:
+                ad_url = f"https://perchance.org/api/getAccessCodeForAdPoweredStuff?__cacheBust={random.random()}"
+                ad_headers = {
+                    "User-Agent": headers["User-Agent"],
+                    "Referer": "https://perchance.org/",
+                }
+                async with aiohttp.ClientSession(headers=ad_headers) as ad_session:
+                    async with ad_session.get(ad_url, timeout=aiohttp.ClientTimeout(total=5.0)) as ad_resp:
+                        if ad_resp.status == 200:
+                            ad_access_code = (await ad_resp.text()).strip()
+            except Exception:
+                pass
+
+            url = (
+                f"{self.BASE_URL}/generate"
+                f"?userKey={user_key}"
+                f"&requestId=aiImageCompletion{random.randint(0, 2**30)}"
+                f"&adAccessCode={ad_access_code}"
+                f"&__cacheBust={random.random()}"
+            )
+            body = {
+                "generatorName": "ai-image-generator",
+                "channel": "ai-text-to-image-generator",
+                "subChannel": "public",
+                "prompt": styled_prompt,
+                "negativePrompt": effective_negative,
+                "seed": seed,
+                "resolution": resolution,
+                "guidanceScale": guidance_scale
+            }
+
+            try:
+                async with aiohttp.ClientSession(headers=headers) as session:
+                    async with session.post(url, json=body) as resp:
+                        if resp.status == 429:
+                            raise errors.RateLimitError("Rate limit exceeded")
+                        if resp.status != 200:
+                            text = await resp.text()
+                            raise errors.ConnectionError(f"Generation failed with HTTP {resp.status}: {text}")
+
+                        response = await resp.json(content_type=None)
+
+                status = response.get("status")
+                if status == "success":
+                    proxy_dl = response.get("imageDownloadUrl") or _find_proxy_download(response)
+                    return ImageResult(
+                        generator=self,
+                        image_id=response['imageId'],
+                        file_extension=response['fileExtension'],
+                        seed=response['seed'],
+                        prompt=response['prompt'],
+                        width=response['width'],
+                        height=response['height'],
+                        guidance_scale=response['guidanceScale'],
+                        negative_prompt=response.get('negativePrompt'),
+                        maybe_nsfw=response.get('maybeNsfw', False),
+                        proxy_download=proxy_dl,
+                    )
+
+                if status in ["invalid_key", "invalid_ad_access_code", "client_update_required"]:
+                    # Invalidate cached key and retry
+                    self._user_keys.pop(self.EMBED_DOMAIN, None)
+                    await asyncio.sleep(1.0 + attempt)
+                    continue
+
+                raise errors.ConnectionError(f"Image generation failed: {status}")
+
+            except (aiohttp.ClientError, asyncio.TimeoutError, errors.ConnectionError) as e:
+                last_error = e
                 self._user_keys.pop(self.EMBED_DOMAIN, None)
-                raise errors.AuthenticationError("Invalid or expired userKey")
-            raise errors.ConnectionError(f"Image generation failed: {status}")
+                await asyncio.sleep(1.0 + attempt)
 
-        proxy_dl = response.get("imageDownloadUrl") or _find_proxy_download(response)
-
-        return ImageResult(
-            generator=self,
-            image_id=response['imageId'],
-            file_extension=response['fileExtension'],
-            seed=response['seed'],
-            prompt=response['prompt'],
-            width=response['width'],
-            height=response['height'],
-            guidance_scale=response['guidanceScale'],
-            negative_prompt=response.get('negativePrompt'),
-            maybe_nsfw=response.get('maybeNsfw', False),
-            proxy_download=proxy_dl,
-        )
+        raise errors.ConnectionError(f"Image generation failed after {max_retries} retries: {last_error}")

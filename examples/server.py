@@ -242,7 +242,25 @@ async def chat_completions(request: ChatCompletionRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/")
+async def root():
+    return {
+        "status": "online",
+        "service": "perchance-openai-api",
+        "endpoints": [
+            "/v1/models",
+            "/v1/chat/completions",
+            "/v1/images/generations",
+            "/v1/options",
+            "/docs"
+        ]
+    }
+
+
 @app.post("/v1/images/generations")
+@app.post("/v1/images/generation")
+@app.post("/v1/image/generations")
+@app.post("/v1/image/generation")
 async def image_generations(request: ImageGenerationRequest):
     """OpenAI-compatible Image Generation endpoint."""
     if not request.prompt.strip():

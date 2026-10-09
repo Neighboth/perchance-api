@@ -30,7 +30,7 @@ class Generator:
         super().__init__()
 
         self.user_data_dir = Path(user_data_dir or DEFAULT_PROFILE_DIR)
-        self.headless = headless
+        self.headless = headless if headless is not None else True
 
         self._pw: Playwright | None = None
         self._context: BrowserContext | None = context
@@ -46,13 +46,21 @@ class Generator:
     async def __aexit__(self, exc_type, exc_value, traceback) -> None:
         await self.close()
 
-    async def _start(self) -> None:
-        if self._context:
+    async def _start(self, force_headful: bool = False) -> None:
+        if self._context and not force_headful:
             return
 
         key = str(self.user_data_dir.resolve())
         async with _CONTEXT_LOCK:
-            if key in _SHARED_CONTEXTS:
+            if force_headful and self._context:
+                try:
+                    await self._context.close()
+                except Exception:
+                    pass
+                self._context = None
+                _SHARED_CONTEXTS.pop(key, None)
+
+            if not force_headful and key in _SHARED_CONTEXTS:
                 pw, ctx = _SHARED_CONTEXTS[key]
                 self._pw = pw
                 self._context = ctx
@@ -63,12 +71,14 @@ class Generator:
                 self._pw = await async_playwright().start()
 
             self.user_data_dir.mkdir(parents=True, exist_ok=True)
+            is_headless = False if force_headful else self.headless
             self._context = await self._pw.chromium.launch_persistent_context(
                 user_data_dir=str(self.user_data_dir),
-                headless=self.headless,
+                headless=is_headless,
                 args=[
                     "--disable-blink-features=AutomationControlled",
                     "--no-sandbox",
+                    "--disable-dev-shm-usage",
                 ],
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
                 viewport={"width": 1280, "height": 800},
@@ -135,10 +145,48 @@ class Generator:
                     await asyncio.sleep(0.5)
 
                 raise errors.AuthenticationError(
+                    f"Authentication timed out on {embed_domain} in headless mode."
+                )
+            except errors.AuthenticationError:
+                if self.headless:
+                    # Headless mode hit a challenge: relaunch headful once so Turnstile can solve
+                    await self._start(force_headful=True)
+                    headful_page = await self._context.new_page()
+                    try:
+                        await headful_page.goto(f"https://{embed_domain}/embed#%7B%7D")
+                        try:
+                            await headful_page.evaluate(f"""async () => {{
+                                if (typeof verifyUser === 'function') {{
+                                    try {{ return await verifyUser({thread}); }} catch(e) {{ return await verifyUser(); }}
+                                }}
+                                return null;
+                            }}""")
+                        except Exception:
+                            pass
+
+                        start_time = asyncio.get_event_loop().time()
+                        while asyncio.get_event_loop().time() - start_time < timeout:
+                            info = await headful_page.evaluate(f"""() => {{
+                                if (!window.generationIdentity) return null;
+                                return {{
+                                    id: window.generationIdentity.id,
+                                    key: window.generationIdentity.storage['userKey-{thread}'] || null
+                                }};
+                            }}""")
+                            if info and info.get("id") and info.get("key"):
+                                self._browser_id = info["id"]
+                                self._user_keys[embed_domain] = info["key"]
+                                return self._browser_id, info["key"]
+                            await asyncio.sleep(0.5)
+                    finally:
+                        await headful_page.close()
+
+                raise errors.AuthenticationError(
                     f"Authentication timed out on {embed_domain}. Please complete verification in browser."
                 )
             finally:
-                await page.close()
+                if not page.is_closed():
+                    await page.close()
 
     async def close(self) -> None:
         """Close the generator and release resources."""
