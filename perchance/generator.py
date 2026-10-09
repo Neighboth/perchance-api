@@ -13,6 +13,10 @@ from . import errors
 DEFAULT_PROFILE_DIR = Path.home() / ".perchance_profile"
 
 
+_SHARED_CONTEXTS: dict[str, tuple[Playwright, BrowserContext]] = {}
+_CONTEXT_LOCK = asyncio.Lock()
+
+
 class Generator:
     """Base Generator for Perchance services using Playwright with persistent session support."""
 
@@ -21,6 +25,7 @@ class Generator:
         *,
         user_data_dir: str | Path | None = None,
         headless: bool = False,
+        context: BrowserContext | None = None,
     ) -> None:
         super().__init__()
 
@@ -28,7 +33,8 @@ class Generator:
         self.headless = headless
 
         self._pw: Playwright | None = None
-        self._context: BrowserContext | None = None
+        self._context: BrowserContext | None = context
+        self._owns_context: bool = context is None
         self._browser_id: str | None = None
         self._user_keys: dict[str, str] = {}
         self._auth_lock: asyncio.Lock = asyncio.Lock()
@@ -41,10 +47,21 @@ class Generator:
         await self.close()
 
     async def _start(self) -> None:
-        if not self._pw:
-            self._pw = await async_playwright().start()
+        if self._context:
+            return
 
-        if not self._context:
+        key = str(self.user_data_dir.resolve())
+        async with _CONTEXT_LOCK:
+            if key in _SHARED_CONTEXTS:
+                pw, ctx = _SHARED_CONTEXTS[key]
+                self._pw = pw
+                self._context = ctx
+                self._owns_context = False
+                return
+
+            if not self._pw:
+                self._pw = await async_playwright().start()
+
             self.user_data_dir.mkdir(parents=True, exist_ok=True)
             self._context = await self._pw.chromium.launch_persistent_context(
                 user_data_dir=str(self.user_data_dir),
@@ -56,6 +73,8 @@ class Generator:
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
                 viewport={"width": 1280, "height": 800},
             )
+            _SHARED_CONTEXTS[key] = (self._pw, self._context)
+            self._owns_context = True
 
     async def ensure_verified(
         self,

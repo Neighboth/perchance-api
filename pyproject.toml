@@ -4,15 +4,15 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry]
 name = "perchance-python"
-version = "0.2.0"
+version = "0.2.1"
 homepage = "https://github.com/Neighboth/perchance-api"
 repository = "https://github.com/Neighboth/perchance-api"
 documentation = "https://github.com/Neighboth/perchance-api#readme"
-description = "Modern unofficial Python client and API library for Perchance AI text and image generation."
+description = "Modern unofficial Python client and OpenAI-compatible API library for Perchance AI text and image generation."
 authors = ["Salih Şimşek <ssimseksalih@gmail.com>"]
 license = "Apache-2.0"
 readme = "README.md"
-keywords = ["perchance", "ai", "image-generation", "text-generation", "api"]
+keywords = ["perchance", "ai", "image-generation", "text-generation", "api", "openai"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -33,3 +33,10 @@ python = "^3.11"
 aiofiles = "^25.1.0"
 aiohttp = "^3.9.0"
 playwright = "^1.57.0"
+python-dotenv = ">=1.0.0"
+fastapi = { version = ">=0.100.0", optional = true }
+uvicorn = { version = ">=0.20.0", optional = true }
+
+[tool.poetry.extras]
+server = ["fastapi", "uvicorn"]
+

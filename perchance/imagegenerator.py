@@ -107,6 +107,9 @@ class ImageResult:
         await self._generator._start()
         page = await self._generator._context.new_page()
         try:
+            if not page.url.startswith("https://image-generation.perchance.org"):
+                await page.goto("https://image-generation.perchance.org/embed#%7B%7D")
+
             response_data = await page.evaluate("""
                 async (urls) => {
                     const failures = [];
@@ -172,7 +175,9 @@ class ImageGenerator(Generator):
         *,
         negative_prompt: str | None = None,
         seed: int = -1,
-        shape: Literal['portrait', 'square', 'landscape'] = 'square',
+        shape: str = "square",
+        ratio: str | None = None,
+        style: str = "professional_photo",
         guidance_scale: float = 7.0
     ) -> ImageResult:
         """
@@ -187,18 +192,20 @@ class ImageGenerator(Generator):
         seed: int
             Generation seed.
         shape: str
-            Image shape. Can be either `portrait`, `square` or `landscape`.
+            Aspect ratio / shape. Can be '1:1', 'square', '9:16', 'portrait', '16:9', 'landscape', etc.
+        ratio: str | None
+            Alias for shape/aspect ratio.
+        style: str
+            Art style. Defaults to 'professional_photo'. Options include 'professional_photo',
+            'casual_photo', 'cinematic', 'anime', 'drawn_anime', 'digital_painting',
+            'concept_art', 'oil_painting', 'watercolor', 'pixel_art', '3d_disney', 'none', etc.
         guidance_scale: float
-            Accuracy of the prompt in range `1-30`. 
+            Accuracy of the prompt in range 1-30.
         """
-        if shape == 'portrait':
-            resolution = '512x768'
-        elif shape == 'square':
-            resolution = '768x768'
-        elif shape == 'landscape':
-            resolution = '768x512'
-        else:
-            raise ValueError(f"Invalid shape: {shape}")
+        from .styles import apply_style, resolve_resolution
+
+        resolution = resolve_resolution(ratio or shape)
+        styled_prompt, effective_negative = apply_style(prompt, style, negative_prompt)
       
         browser_id, user_key = await self.ensure_verified(self.EMBED_DOMAIN, thread=0)
 
@@ -212,8 +219,8 @@ class ImageGenerator(Generator):
             "generatorName": "ai-image-generator",
             "channel": "ai-text-to-image-generator",
             "subChannel": "public",
-            "prompt": prompt,
-            "negativePrompt": negative_prompt or "",
+            "prompt": styled_prompt,
+            "negativePrompt": effective_negative,
             "seed": seed,
             "resolution": resolution,
             "guidanceScale": guidance_scale
