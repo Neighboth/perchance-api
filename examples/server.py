@@ -31,7 +31,7 @@ HOST = os.getenv("HOST", "0.0.0.0")
 app = FastAPI(
     title="Perchance OpenAI-Compatible API",
     description="OpenAI API compatible server powered by Perchance AI (Text & Image Generation)",
-    version="0.2.4"
+    version="0.2.5"
 )
 
 app.add_middleware(

@@ -24,13 +24,14 @@ class Generator:
         self,
         *,
         user_data_dir: str | Path | None = None,
-        headless: bool = True,
+        headless: bool = False,
         context: BrowserContext | None = None,
     ) -> None:
         super().__init__()
 
         self.user_data_dir = Path(user_data_dir or DEFAULT_PROFILE_DIR)
-        self.headless = bool(headless)
+        env_headless = os.getenv("PERCHANCE_HEADLESS", "").lower() in ("true", "1", "yes")
+        self.headless = bool(headless or env_headless)
 
         self._pw: Playwright | None = None
         self._browser: Browser | None = None
@@ -132,55 +133,71 @@ class Generator:
 
                 # Call embed verifyUser()
                 try:
-                    await page.evaluate(f"""async () => {{
-                        if (typeof verifyUser === 'function') {{
-                            try {{
-                                return await verifyUser({thread});
-                            }} catch(e) {{
-                                return await verifyUser('default');
+                    if "image-generation" in embed_domain:
+                        verified = await page.evaluate("async () => typeof verifyUser === 'function' ? await verifyUser() : false")
+                        if verified:
+                            key = await page.evaluate(f"() => window.generationIdentity?.storage?.['userKey-{thread}'] || null")
+                            browser_id = await page.evaluate("() => window.generationIdentity?.id || null")
+                            if browser_id and key:
+                                self._browser_id = browser_id
+                                self._user_keys[embed_domain] = key
+                                return browser_id, key
+                    else:
+                        direct_key = await page.evaluate(f"""async () => {{
+                            if (typeof verifyUser === 'function') {{
+                                try {{ return await verifyUser({thread}); }} catch(e) {{ return await verifyUser('default'); }}
                             }}
-                        }}
-                        return null;
-                    }}""")
+                            return null;
+                        }}""")
+                        if direct_key and isinstance(direct_key, str):
+                            browser_id = await page.evaluate("() => window.generationIdentity?.id || null")
+                            if browser_id:
+                                self._browser_id = browser_id
+                                self._user_keys[embed_domain] = direct_key
+                                return browser_id, direct_key
                 except Exception:
                     pass
 
                 # Poll userKey from generationIdentity and localStorage
                 start_time = asyncio.get_event_loop().time()
                 while asyncio.get_event_loop().time() - start_time < timeout:
-                    info = await page.evaluate(f"""() => {{
-                        let id = window.generationIdentity ? window.generationIdentity.id : null;
-                        let key = null;
-                        if (window.generationIdentity && window.generationIdentity.storage) {{
-                            key = window.generationIdentity.storage['userKey-{thread}'] || null;
-                        }}
-                        if (!key) {{
-                            for (let k in localStorage) {{
-                                if (k.includes('userKey-{thread}')) {{
-                                    key = localStorage[k];
-                                    break;
+                    try:
+                        info = await page.evaluate(f"""() => {{
+                            let id = window.generationIdentity ? window.generationIdentity.id : null;
+                            let key = null;
+                            if (window.generationIdentity && window.generationIdentity.storage) {{
+                                key = window.generationIdentity.storage['userKey-{thread}'] || null;
+                            }}
+                            if (!key) {{
+                                for (let k in localStorage) {{
+                                    if (k.includes('userKey-{thread}')) {{
+                                        key = localStorage[k];
+                                        break;
+                                    }}
                                 }}
                             }}
-                        }}
-                        return {{ id: id, key: key }};
-                    }}""")
-
-                    if info and info.get("id") and info.get("key"):
-                        # Ensure we give the verification network roundtrip a moment
-                        await asyncio.sleep(1.0)
-                        # Re-read key to ensure it is the freshly verified one
-                        fresh_key = await page.evaluate(f"""() => {{
-                            if (window.generationIdentity && window.generationIdentity.storage && window.generationIdentity.storage['userKey-{thread}']) {{
-                                return window.generationIdentity.storage['userKey-{thread}'];
-                            }}
-                            for (let k in localStorage) {{
-                                if (k.includes('userKey-{thread}')) return localStorage[k];
-                            }}
-                            return null;
+                            return {{ id: id, key: key }};
                         }}""")
-                        effective_key = fresh_key or info["key"]
-                        self._browser_id = info["id"]
-                        self._user_keys[embed_domain] = effective_key
+
+                        if info and info.get("id") and info.get("key"):
+                            # Ensure we give the verification network roundtrip a moment
+                            await asyncio.sleep(1.0)
+                            # Re-read key to ensure it is the freshly verified one
+                            try:
+                                fresh_key = await page.evaluate(f"""() => {{
+                                    if (window.generationIdentity && window.generationIdentity.storage && window.generationIdentity.storage['userKey-{thread}']) {{
+                                        return window.generationIdentity.storage['userKey-{thread}'];
+                                    }}
+                                    for (let k in localStorage) {{
+                                        if (k.includes('userKey-{thread}')) return localStorage[k];
+                                    }}
+                                    return null;
+                                }}""")
+                            except Exception:
+                                fresh_key = None
+                            effective_key = fresh_key or info["key"]
+                            self._browser_id = info["id"]
+                            self._user_keys[embed_domain] = effective_key
 
                         # Save storage state to profile directory
                         try:
@@ -190,6 +207,8 @@ class Generator:
                             pass
 
                         return self._browser_id, effective_key
+                    except Exception:
+                        pass
 
                     await asyncio.sleep(0.5)
 

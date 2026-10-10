@@ -4,7 +4,7 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry]
 name = "perchance-python"
-version = "0.2.4"
+version = "0.2.5"
 homepage = "https://github.com/Neighboth/perchance-api"
 repository = "https://github.com/Neighboth/perchance-api"
 documentation = "https://github.com/Neighboth/perchance-api#readme"
